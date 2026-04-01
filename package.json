@@ -1,0 +1,14 @@
+{
+  "name": "local-knowledge-backend",
+  "version": "1.0.0",
+  "description": "Backend for Local Knowledge fishing forecasts",
+  "scripts": {
+    "deploy:functions": "supabase functions deploy",
+    "serve:functions": "supabase functions serve",
+    "db:reset": "supabase db reset",
+    "db:push": "supabase db push"
+  },
+  "devDependencies": {
+    "supabase": "^1.142.0"
+  }
+}
