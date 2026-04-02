@@ -11,6 +11,16 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // Verify admin authorization
+  const authHeader = req.headers.get('authorization')
+  const expectedKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!authHeader || authHeader.replace('Bearer ', '') !== expectedKey) {
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized' }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+    )
+  }
+
   try {
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -134,20 +144,21 @@ serve(async (req) => {
           })
 
         // Check for 4-star days and send SMS
-        const hasFourStar = forecasts.some((f: any) => 
+        const hasFourStar = forecasts.some((f: any) =>
           f.day_1?.rating >= 4 || f.day_2?.rating >= 4 || f.day_3?.rating >= 4
         )
 
         if (hasFourStar && user.phone && twilioSid && twilioToken) {
+          // Find spots with ANY 4+ star day (not just day_1)
           const fourStarSpots = forecasts
-            .filter((f: any) => f.day_1?.rating >= 4)
+            .filter((f: any) => f.day_1?.rating >= 4 || f.day_2?.rating >= 4 || f.day_3?.rating >= 4)
             .map((f: any) => {
               const spot = userSpots.find((us: any) => us.spot_id === f.spot_id)
               return spot?.spots?.name
             })
             .filter(Boolean)
 
-          const smsBody = `Local Knowledge Alert ⭐⭐⭐⭐\n\nExceptional conditions tomorrow at:\n${fourStarSpots.join(', ')}\n\nFull forecast in your email.`
+          const smsBody = `Local Knowledge Alert ⭐⭐⭐⭐\n\nExceptional conditions coming up at:\n${fourStarSpots.join(', ')}\n\nFull forecast in your email.`
 
           await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
             method: 'POST',
@@ -199,15 +210,50 @@ serve(async (req) => {
 })
 
 function buildEmailHtml({ user, species, spots, forecasts, formattedDate }: any) {
-  const primarySpot = spots.find((s: any) => 
+  const primarySpot = spots.find((s: any) =>
     forecasts.some((f: any) => f.spot_id === s.id)
   )
-  
+
   const primaryForecast = forecasts.find((f: any) => f.spot_id === primarySpot?.id)
 
   const day1 = primaryForecast?.day_1
   const day2 = primaryForecast?.day_2
   const day3 = primaryForecast?.day_3
+
+  const formatDay = (day: any, dayLabel: string) => {
+    if (!day) return ''
+    return `
+    <div style="margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid #333;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-size: 16px; font-weight: 600;">${dayLabel} — ${day.date || 'TBD'}</span>
+        <span style="font-size: 18px; letter-spacing: 2px;">${'⭐'.repeat(day.rating || 3)} (${day.rating || 3}/5)</span>
+      </div>
+      <div style="margin-bottom: 8px; font-size: 14px; color: #ccc;"><strong style="color: white;">Wind:</strong> ${day.wind || 'Data unavailable'}</div>
+      <div style="margin-bottom: 8px; font-size: 14px; color: #ccc;"><strong style="color: white;">Sea:</strong> ${day.sea || 'Data unavailable'}</div>
+      <div style="margin-bottom: 8px; font-size: 14px; color: #ccc;"><strong style="color: white;">Tides:</strong> ${day.tides || 'Data unavailable'}</div>
+      <div style="font-size: 14px; color: #ccc;"><strong style="color: white;">Assessment:</strong> ${day.assessment || 'Check back later'}</div>
+    </div>
+    `
+  }
+
+  // Build secondary spots section if user has multiple spots
+  const secondarySpotsHtml = forecasts.length > 1 ? `
+    <div style="background: #2a2a2a; padding: 24px; border-radius: 12px; margin: 24px 0;">
+      <div style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; color: #888; margin-bottom: 16px;">Also Watching</div>
+      ${forecasts.slice(1).map((f: any) => {
+        const spot = spots.find((s: any) => s.id === f.spot_id)
+        return `
+        <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #333;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-weight: 600;">${spot?.name || 'Unknown Spot'}</span>
+            <span>${'⭐'.repeat(f.day_1?.rating || 3)}</span>
+          </div>
+          <div style="font-size: 13px; color: #888;">${f.day_1?.wind?.substring(0, 50) || 'No wind data'}...</div>
+        </div>
+        `
+      }).join('')}
+    </div>
+  ` : ''
 
   return `
 <!DOCTYPE html>
@@ -223,11 +269,6 @@ function buildEmailHtml({ user, species, spots, forecasts, formattedDate }: any)
     h1 { font-size: 28px; font-weight: 700; margin: 8px 0; }
     .date { color: #666; }
     .forecast-box { background: #1a1a1a; color: white; padding: 32px; border-radius: 16px; margin: 24px 0; }
-    .day-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #333; }
-    .day-name { font-size: 18px; font-weight: 600; }
-    .stars { font-size: 20px; letter-spacing: 4px; }
-    .detail { margin-bottom: 12px; font-size: 15px; color: #ccc; }
-    .detail strong { color: white; }
     .captains-call { background: #0066ff; color: white; padding: 24px; border-radius: 12px; margin-top: 24px; }
     .captains-call-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 8px; opacity: 0.8; }
     .captains-call-text { font-size: 16px; font-weight: 600; }
@@ -238,27 +279,27 @@ function buildEmailHtml({ user, species, spots, forecasts, formattedDate }: any)
 <body>
   <div class="header">
     <div class="logo">Local Knowledge</div>
-    <h1>Your Fishing Forecast</h1>
+    <h1>Your 3-Day Fishing Forecast</h1>
     <div class="date">${formattedDate}</div>
   </div>
-  
+
   <div class="forecast-box">
-    <div class="day-header">
-      <span class="day-name">${primarySpot?.name || 'Your Local Spot'}</span>
-      <span class="stars">${'⭐'.repeat(day1?.rating || 3)} (${day1?.rating || 3}/5)</span>
+    <div style="font-size: 20px; font-weight: 700; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #333;">
+      ${primarySpot?.name || 'Your Local Spot'}
     </div>
-    
-    <div class="detail"><strong>Wind:</strong> ${day1?.wind || 'Data unavailable'}</div>
-    <div class="detail"><strong>Sea:</strong> ${day1?.sea || 'Data unavailable'}</div>
-    <div class="detail"><strong>Tides:</strong> ${day1?.tides || 'Data unavailable'}</div>
-    <div class="detail"><strong>Assessment:</strong> ${day1?.assessment || 'Check back later'}</div>
-    
+
+    ${formatDay(day1, 'Tomorrow')}
+    ${formatDay(day2, day2?.date ? new Date(day2.date).toLocaleDateString('en-US', { weekday: 'long' }) : 'Day 2')}
+    ${formatDay(day3, day3?.date ? new Date(day3.date).toLocaleDateString('en-US', { weekday: 'long' }) : 'Day 3')}
+
     <div class="captains-call">
       <div class="captains-call-label">Captain's Call</div>
       <div class="captains-call-text">${primaryForecast?.captains_call || 'Check conditions before heading out.'}</div>
     </div>
   </div>
-  
+
+  ${secondarySpotsHtml}
+
   <div class="footer">
     <p>You're receiving this because you subscribed to Local Knowledge.</p>
     <p><a href="#">Manage preferences</a> · <a href="#">Unsubscribe</a></p>

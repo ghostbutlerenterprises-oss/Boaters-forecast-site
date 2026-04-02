@@ -11,6 +11,16 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  // Verify admin authorization
+  const authHeader = req.headers.get('authorization')
+  const expectedKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!authHeader || authHeader.replace('Bearer ', '') !== expectedKey) {
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized' }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 401 }
+    )
+  }
+
   try {
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -18,10 +28,16 @@ serve(async (req) => {
       { auth: { persistSession: false } }
     )
 
-    // Get all active spots that have subscribers
+    // Get spots for active subscribers only (trialing or active)
     const { data: activeSpotIds, error: spotIdsError } = await supabaseClient
       .from('user_spots')
       .select('spot_id')
+      .in('user_id', (
+        supabaseClient
+          .from('subscriptions')
+          .select('user_id')
+          .in('status', ['trialing', 'active'])
+      ))
       .distinct()
 
     if (spotIdsError) throw spotIdsError
@@ -53,18 +69,21 @@ serve(async (req) => {
       try {
         // Fetch weather data from Open-Meteo
         const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${spot.latitude}&longitude=${spot.longitude}&daily=temperature_2m_max,windspeed_10m_max,winddirection_10m_dominant&hourly=windspeed_10m,winddirection_10m&timezone=America/New_York&forecast_days=3`
-        
+
         const weatherRes = await fetch(weatherUrl)
         const weather = await weatherRes.json()
 
         // Fetch marine data
         const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${spot.latitude}&longitude=${spot.longitude}&daily=wave_height_max&timezone=America/New_York&forecast_days=3`
-        
+
         const marineRes = await fetch(marineUrl)
         const marine = await marineRes.json()
 
+        // Fetch tide data from NOAA
+        const tides = await fetchTideData(spot.latitude, spot.longitude, forecastDate)
+
         // Generate forecast using AI (OpenAI)
-        const forecast = await generateForecastWithAI(spot, weather, marine)
+        const forecast = await generateForecastWithAI(spot, weather, marine, tides)
 
         // Save forecast to database
         const { error: insertError } = await supabaseClient
@@ -105,12 +124,55 @@ serve(async (req) => {
   }
 })
 
-async function generateForecastWithAI(spot: any, weather: any, marine: any) {
+async function fetchTideData(lat: number, lon: number, startDate: string): Promise<any> {
+  try {
+    // Find nearest NOAA tide station
+    // Using NOAA CO-OPS API - stations around Tampa Bay area
+    // 8726667 = Port Manatee, 8726522 = St. Petersburg, 8726384 = Port Tampa
+    const stations = [
+      { id: '8726667', name: 'Port Manatee', lat: 27.6383, lon: -82.5623 },
+      { id: '8726522', name: 'St. Petersburg', lat: 27.7606, lon: -82.6269 },
+      { id: '8726384', name: 'Port Tampa', lat: 27.8667, lon: -82.4333 }
+    ]
+
+    // Find closest station
+    const closest = stations.reduce((prev, curr) => {
+      const prevDist = Math.sqrt(Math.pow(prev.lat - lat, 2) + Math.pow(prev.lon - lon, 2))
+      const currDist = Math.sqrt(Math.pow(curr.lat - lat, 2) + Math.pow(curr.lon - lon, 2))
+      return currDist < prevDist ? curr : prev
+    })
+
+    const endDate = new Date(startDate)
+    endDate.setDate(endDate.getDate() + 3)
+
+    const url = `https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?begin_date=${startDate.replace(/-/g, '')}&end_date=${endDate.toISOString().split('T')[0].replace(/-/g, '')}&station=${closest.id}&product=predictions&datum=mllw&units=english&time_zone=lst_ldt&format=json`
+
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`NOAA API error: ${res.status}`)
+
+    const data = await res.json()
+    return {
+      station: closest.name,
+      predictions: data.predictions || []
+    }
+  } catch (error) {
+    console.error('Tide fetch error:', error)
+    return { station: 'Unknown', predictions: [], error: error.message }
+  }
+}
+
+async function generateForecastWithAI(spot: any, weather: any, marine: any, tides: any) {
   const openaiKey = Deno.env.get('OPENAI_API_KEY')
-  
+
   if (!openaiKey) {
     throw new Error('OPENAI_API_KEY not configured')
   }
+
+  // Format tide data for AI
+  const tideSummary = tides.predictions ? tides.predictions.slice(0, 12).map((t: any) => ({
+    time: t.t,
+    height: parseFloat(t.v).toFixed(1)
+  })) : []
 
   const prompt = `
 Generate a fishing forecast for ${spot.name} (${spot.region}).
@@ -124,6 +186,9 @@ ${JSON.stringify(weather.hourly?.windspeed_10m?.slice(0, 24), null, 2)}
 Marine data:
 ${JSON.stringify(marine.daily, null, 2)}
 
+Tide data from ${tides.station}:
+${JSON.stringify(tideSummary, null, 2)}
+
 Target species at this spot: ${spot.species?.join(', ') || 'general'}
 
 Return a JSON object with this structure:
@@ -133,7 +198,7 @@ Return a JSON object with this structure:
     "rating": 1-5,
     "wind": "direction speed-gust mph. description of how it changes",
     "sea": "height ft — description",
-    "tides": "Low time → High time (height) → Low time",
+    "tides": "Low 6:12am (0.8ft) → High 12:44pm (2.1ft) → Low 7:15pm (0.5ft)",
     "assessment": "specific fishing advice for the target species"
   },
   "day2": { same structure },
@@ -153,6 +218,8 @@ Focus on species-specific behavior:
 - Snook want moving water on falling tides
 - Redfish feed aggressively on high tides over grass
 - Trout prefer low light, wind-protected areas
+
+Use the REAL tide data provided above. Format tides as: "Low HH:MMam (X.Xft) → High HH:MMpm (X.Xft) → Low HH:MMpm (X.Xft)"
 
 Be conversational but specific. Include exact times when relevant.
 `
