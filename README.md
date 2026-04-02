@@ -56,7 +56,7 @@ In Supabase Dashboard → Database → Cron Jobs:
 ```sql
 SELECT cron.schedule(
   'generate-forecasts',
-  '30 17 * * *', -- 5:30 PM UTC = 12:30 PM ET (wait, need 5:30 PM ET = 21:30 UTC)
+  '30 21 * * *', -- 9:30 PM UTC = 5:30 PM EDT (summer) / 4:30 PM EST (winter)
   $$
   SELECT net.http_post(
     url:='https://your-project.supabase.co/functions/v1/generate-forecasts',
@@ -70,7 +70,7 @@ SELECT cron.schedule(
 ```sql
 SELECT cron.schedule(
   'deliver-forecasts',
-  '0 22 * * *', -- 10:00 PM UTC = 6:00 PM ET
+  '0 22 * * *', -- 10:00 PM UTC = 6:00 PM EDT (summer) / 5:00 PM EST (winter)
   $$
   SELECT net.http_post(
     url:='https://your-project.supabase.co/functions/v1/deliver-forecasts',
@@ -80,14 +80,7 @@ SELECT cron.schedule(
 );
 ```
 
-Wait, that's wrong. ET is UTC-4 (EDT) or UTC-5 (EST).
-- 6:00 PM ET = 22:00 UTC (EDT) or 23:00 UTC (EST)
-
-Correct cron:
-- 5:30 PM ET = 21:30 UTC (EDT summer) or 22:30 UTC (EST winter)
-- 6:00 PM ET = 22:00 UTC (EDT summer) or 23:00 UTC (EST winter)
-
-Use America/New_York timezone in the function instead.
+**Note:** These times use UTC. During EDT (summer), 22:00 UTC = 6:00 PM ET. During EST (winter), 22:00 UTC = 5:00 PM ET. Adjust if you need exact 6:00 PM ET year-round (would need separate cron jobs for DST transitions).
 
 ### 6. Configure Stripe Webhook
 

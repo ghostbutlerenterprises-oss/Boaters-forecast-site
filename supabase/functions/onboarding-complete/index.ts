@@ -135,6 +135,29 @@ serve(async (req) => {
 
     if (subError) throw subError
 
+    // Send welcome email
+    try {
+      await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-email`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          to: user.email,
+          type: 'welcome',
+          data: {
+            name: user.email?.split('@')[0],
+            dashboardUrl: `${Deno.env.get('SITE_URL') || 'https://billroyle.github.io/local-knowledge-site'}/dashboard`,
+            unsubscribeUrl: `${Deno.env.get('SITE_URL') || 'https://billroyle.github.io/local-knowledge-site'}/unsubscribe?user=${user.id}`
+          }
+        })
+      })
+    } catch (emailError) {
+      console.error('Welcome email failed:', emailError)
+      // Don't fail onboarding if email fails
+    }
+
     return new Response(
       JSON.stringify({
         success: true,

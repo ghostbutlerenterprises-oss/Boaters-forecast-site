@@ -107,11 +107,46 @@ serve(async (req) => {
           .eq('stripe_customer_id', invoice.customer)
 
         if (error) throw error
+
+        // Send payment failed email
+        try {
+          const { data: userData } = await supabaseClient
+            .from('subscriptions')
+            .select('profiles:user_id(email)')
+            .eq('stripe_customer_id', invoice.customer)
+            .single()
+          
+          if (userData?.profiles?.email) {
+            await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-email`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                to: userData.profiles.email,
+                type: 'payment-failed',
+                data: {
+                  billingUrl: `${Deno.env.get('SITE_URL') || 'https://billroyle.github.io/local-knowledge-site'}/dashboard`
+                }
+              })
+            })
+          }
+        } catch (emailError) {
+          console.error('Payment failed email error:', emailError)
+        }
         break
       }
 
       case 'customer.subscription.deleted': {
         const subscription = event.data.object
+        
+        // Get user info before updating
+        const { data: subData } = await supabaseClient
+          .from('subscriptions')
+          .select('profiles:user_id(email), current_period_end')
+          .eq('stripe_subscription_id', subscription.id)
+          .single()
         
         // Mark subscription as cancelled
         const { error } = await supabaseClient
@@ -123,6 +158,29 @@ serve(async (req) => {
           .eq('stripe_subscription_id', subscription.id)
 
         if (error) throw error
+
+        // Send cancellation email
+        try {
+          if (subData?.profiles?.email) {
+            await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/send-email`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                to: subData.profiles.email,
+                type: 'subscription-cancelled',
+                data: {
+                  accessEndsAt: new Date(subData.current_period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }),
+                  resubscribeUrl: `${Deno.env.get('SITE_URL') || 'https://billroyle.github.io/local-knowledge-site'}/dashboard`
+                }
+              })
+            })
+          }
+        } catch (emailError) {
+          console.error('Cancellation email error:', emailError)
+        }
         break
       }
     }

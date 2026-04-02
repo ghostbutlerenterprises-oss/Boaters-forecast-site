@@ -239,35 +239,26 @@ async function deliverForecasts() {
 backend/
 ├── supabase/
 │   ├── migrations/
-│   │   ├── 001_initial_schema.sql
-│   │   ├── 002_add_spots_data.sql
-│   │   └── 003_add_indexes.sql
-│   ├── functions/
-│   │   ├── auth-signup/
-│   │   │   └── index.ts
-│   │   ├── onboarding-complete/
-│   │   │   └── index.ts
-│   │   ├── user-profile/
-│   │   │   └── index.ts
-│   │   ├── generate-forecasts/
-│   │   │   └── index.ts
-│   │   ├── deliver-forecasts/
-│   │   │   └── index.ts
-│   │   └── stripe-webhook/
-│   │       └── index.ts
-│   └── config.toml
-├── src/
-│   ├── lib/
-│   │   ├── openmeteo.ts
-│   │   ├── willyweather.ts
-│   │   ├── forecast-generator.ts
-│   │   ├── email-builder.ts
-│   │   └── sms-builder.ts
-│   └── types/
-│       └── index.ts
-├── package.json
-└── README.md
+│   │   ├── 001_initial_schema.sql    # Database schema + RLS policies
+│   │   └── 002_seed_spots_tampa.sql  # Initial Tampa Bay spots data
+│   └── functions/
+│       ├── onboarding-complete/
+│       │   └── index.ts              # Post-signup: profile, spots, subscription
+│       ├── generate-forecasts/
+│       │   └── index.ts              # Daily cron: fetch NOAA/Open-Meteo, generate with AI
+│       ├── deliver-forecasts/
+│       │   └── index.ts              # Daily cron: email forecasts, SMS alerts
+│       ├── stripe-webhook/
+│       │   └── index.ts              # Handle Stripe events + transactional emails
+│       └── send-email/
+│           └── index.ts              # Transactional email templates (welcome, billing)
+├── README.md                         # Setup and deployment guide
+├── API.md                            # API endpoint documentation
+├── DEPLOY.md                         # Deployment checklist
+└── deploy.sh                         # Deployment script
 ```
+
+**Note:** The `src/lib/` directory described in earlier versions does not exist. All logic is contained within the edge functions above.
 
 ## Environment Variables
 
