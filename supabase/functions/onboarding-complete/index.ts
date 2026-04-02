@@ -12,9 +12,17 @@ serve(async (req) => {
   }
 
   try {
+    // Client for auth verification (uses ANON key with user's JWT)
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    )
+
+    // Admin client for database writes (uses SERVICE_ROLE key)
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } }
     )
 
     const { zip_code, species, radius_miles = 50, phone = null } = await req.json()
@@ -47,8 +55,8 @@ serve(async (req) => {
       )
     }
 
-    // Create or update profile
-    const { error: profileError } = await supabaseClient
+    // Create or update profile (using admin client to bypass RLS)
+    const { error: profileError } = await supabaseAdmin
       .from('profiles')
       .upsert({
         id: user.id,
@@ -60,7 +68,7 @@ serve(async (req) => {
 
     if (profileError) throw profileError
 
-    // Save species preferences
+    // Save species preferences (using admin client)
     const speciesInserts = species.map((s, index) => ({
       user_id: user.id,
       species: s.toLowerCase(),
@@ -68,12 +76,12 @@ serve(async (req) => {
     }))
 
     // Delete existing species prefs and insert new ones
-    await supabaseClient
+    await supabaseAdmin
       .from('user_species')
       .delete()
       .eq('user_id', user.id)
 
-    const { error: speciesError } = await supabaseClient
+    const { error: speciesError } = await supabaseAdmin
       .from('user_species')
       .insert(speciesInserts)
 
@@ -82,7 +90,7 @@ serve(async (req) => {
     // Find nearest spots based on zip code
     // For MVP: simple zip prefix matching, later use geocoding
     const zipPrefix = zip_code.substring(0, 3)
-    const { data: nearbySpots, error: spotsError } = await supabaseClient
+    const { data: nearbySpots, error: spotsError } = await supabaseAdmin
       .from('spots')
       .select('*')
       .or(`zip_code.like.${zipPrefix}%,region.eq.tampa-bay`) // Fallback to Tampa Bay for now
@@ -99,23 +107,23 @@ serve(async (req) => {
       }))
 
       // Delete existing assignments
-      await supabaseClient
+      await supabaseAdmin
         .from('user_spots')
         .delete()
         .eq('user_id', user.id)
 
-      const { error: assignmentError } = await supabaseClient
+      const { error: assignmentError } = await supabaseAdmin
         .from('user_spots')
         .insert(spotAssignments)
 
       if (assignmentError) throw assignmentError
     }
 
-    // Create subscription record (trialing status)
+    // Create subscription record (trialing status) (using admin client)
     const trialEndsAt = new Date()
     trialEndsAt.setDate(trialEndsAt.getDate() + 30)
 
-    const { error: subError } = await supabaseClient
+    const { error: subError } = await supabaseAdmin
       .from('subscriptions')
       .upsert({
         user_id: user.id,

@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import Stripe from 'https://esm.sh/stripe@12.0.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -32,9 +33,18 @@ serve(async (req) => {
 
     const body = await req.text()
     
-    // Verify webhook signature (simplified - in production use Stripe library)
-    // For now, we'll parse and handle the event
-    const event = JSON.parse(body)
+    // Verify webhook signature using Stripe library
+    const stripe = new Stripe(stripeSecret, { apiVersion: '2023-10-16' })
+    let event
+    try {
+      event = stripe.webhooks.constructEvent(body, signature, webhookSecret)
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err.message)
+      return new Response(
+        JSON.stringify({ error: 'Invalid signature' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      )
+    }
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
